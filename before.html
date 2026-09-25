@@ -316,33 +316,34 @@ function updateTrainSpeedLabel(kmh){
   trainSpeedLabel.texture.needsUpdate=true;
 }
 
-// ---- Train motion profile (unchanged physics for the approach: gradual
-// deceleration into the station). The train travels right -> left, so x(t)
-// below is applied to the 3D object directly (no mirroring): it starts at
-// xStart (right edge), cruises through Crossing 1 (+crossingX), decelerates
-// into the station — and now STAYS there. The station stop is the train's
-// final stop: it never accelerates back out or continues on toward
-// Crossing 2, so xCrossB/xEnd only remain as reference points used to keep
-// the approach speed/deceleration profile identical to before. ----
+// ---- Train motion profile (unchanged physics: gradual deceleration into
+// the station, a full dwell, and gradual acceleration back out). The train
+// travels right -> left, so x(t) below is applied to the 3D object directly
+// (no mirroring): it starts at xStart (right edge), cruises through
+// Crossing 1 (+crossingX), decelerates into the station, dwells, accelerates
+// out toward Crossing 2 (-crossingX), and cruises on to xEnd (left edge). ----
 const xStart=8.5, xCrossA=crossingX, xMidA=xCrossA/2, xStation=0, xCrossB=-crossingX, xEnd=-8.5;
 const d1 = xStart - xMidA;      // fast cruise
 const d2 = xMidA - xStation;    // deceleration into the station
-const d4 = xStation - xCrossB;  // (unused for motion now, kept for speed calc)
-const d5 = xCrossB - xEnd;      // (unused for motion now, kept for speed calc)
+const d4 = xStation - xCrossB;  // acceleration out of the station
+const d5 = xCrossB - xEnd;      // fast cruise
 
-const totalDuration = 360;      // seconds, reference full moving profile (unchanged)
-const stationStop = 120;        // seconds, reference dwell time (unchanged)
+const totalDuration = 360;      // seconds, full moving profile (unchanged)
+const stationStop = 120;        // seconds, dwell time at the station (unchanged)
 const movingTime = totalDuration - stationStop;
 
-// Kept identical to before so the cruise speed and deceleration into the
-// station look exactly the same as they did prior to this change.
 const v = (d1 + 2*d2 + 2*d4 + d5) / movingTime;
 
 const t1 = d1/v;
 const t2 = 2*d2/v;
+const t4 = 2*d4/v;
+const t5 = d5/v;
 
 const T1 = t1;
-const T2 = T1+t2; // moment the train reaches the station and stops — for good
+const T2 = T1+t2;
+const T3 = T2+stationStop;
+const T4 = T3+t4;
+const T5 = T4+t5; // == totalDuration
 
 function trainX(t){
   if(t < T1){
@@ -350,8 +351,14 @@ function trainX(t){
   } else if(t < T2){
     const tau = t - T1;
     return xMidA - v*tau + v*tau*tau/(2*t2);
+  } else if(t < T3){
+    return xStation;
+  } else if(t < T4){
+    const tau = t - T3;
+    return xStation - v*tau*tau/(2*t4);
   } else {
-    return xStation; // final stop — train remains here permanently
+    const tau = t - T4;
+    return xCrossB - v*tau;
   }
 }
 
@@ -361,57 +368,56 @@ function trainSpeedAt(t){
     const tau=t-T1;
     return Math.max(0, v*(1-tau/t2));
   }
-  return 0;
+  if(t < T3) return 0;
+  if(t < T4){
+    const tau=t-T3;
+    return Math.min(v, v*tau/t4);
+  }
+  return v;
 }
 
 function trainStateAt(t){
   if(t < T1) return 'Cruising toward Crossing 1';
   if(t < T2) return 'Decelerating for the approach to train station';
-  return 'Stopped at train station — final stop';
+  if(t < T3) return 'Stopped at train station';
+  if(t < T4) return 'Accelerating out of the station toward Crossing 2';
+  return 'Cruising toward the left-hand edge';
 }
 
 // ---- Full-sequence timeline ----
 // 0. Default view, no train, crossings open.
 // 1. Crossing 1 (right-hand crossing) starts closing.
 // 2. 45s later the train appears from the right edge and starts moving.
-// 3. 1s after the train appears, Crossing 2 (left-hand crossing) starts closing
-//    (unchanged — Crossing 2's closing time does not depend on the train's
-//    final stop).
-// 4. The train comes to its final stop at the station and does not continue.
-// 5. Crossing 1 re-opens 20s after the train has fully cleared it (unchanged).
-// 6. Crossing 2 re-opens 5 minutes after the train has come to its final
-//    stop at the station.
+// 3. 1s after the train appears, Crossing 2 (left-hand crossing) starts closing.
+// 4. Each crossing re-opens 20s after the train has fully cleared it.
 const preambleDuration = 2;          // no train, default view
 const closeTransitionDuration = 2;   // barrier + car fade duration
-const crossingOpenDelay = 20;        // wait after train clears crossing 1 before re-opening
-const crossing2OpenDelayAfterStop = 5*60; // 5 minutes after the train's final stop
+const crossingOpenDelay = 20;        // wait after train clears before re-opening
 
 const crossing1CloseStart = preambleDuration;                 // 2s
 const crossing1CloseEnd   = crossing1CloseStart + closeTransitionDuration; // 4s
 const trainAppearTime     = crossing1CloseStart + 45;          // 47s
-const crossing2CloseStart = trainAppearTime + 1;               // 48s (unchanged)
-const crossing2CloseEnd   = crossing2CloseStart + closeTransitionDuration; // 50s (unchanged)
+const crossing2CloseStart = trainAppearTime + 1;               // 48s
+const crossing2CloseEnd   = crossing2CloseStart + closeTransitionDuration; // 50s
 
-// Distance (in scene units) the train's centre must travel past Crossing 1's
-// centre before Crossing 1 is fully clear: half the crossing deck width
+// Distance (in scene units) the train's centre must travel past a crossing's
+// centre before the crossing is fully clear: half the crossing deck width
 // plus half the train's length.
 const zoneHalf = 0.675 + trainW/2;
 
-// Falls exactly within the constant-speed cruise segment of the motion
-// profile (segment 1), so the linear inversion below is exact.
+// Both of these fall exactly within a constant-speed cruise segment of the
+// motion profile (segment 1 for crossing 1, segment 5 for crossing 2), so
+// the linear inversion below is exact, not an approximation.
 const cross1LeaveLocalT = (xStart - crossingX + zoneHalf) / v;
+const cross2LeaveLocalT = T4 + zoneHalf / v;
 
 const crossing1OpenStart = trainAppearTime + cross1LeaveLocalT + crossingOpenDelay;
 const crossing1OpenEnd   = crossing1OpenStart + closeTransitionDuration;
-
-// Crossing 2 now re-opens purely on a timer from the train's final stop —
-// it is never physically cleared by the train, since the train stops at the
-// station for good.
-const trainStopTime      = trainAppearTime + T2; // when the train comes to its final stop
-const crossing2OpenStart = trainStopTime + crossing2OpenDelayAfterStop;
+const crossing2OpenStart = trainAppearTime + cross2LeaveLocalT + crossingOpenDelay;
 const crossing2OpenEnd   = crossing2OpenStart + closeTransitionDuration;
 
-const CYCLE = Math.max(crossing1OpenEnd, crossing2OpenEnd) + 8; // small pause, then loop
+const trainDepartTime = trainAppearTime + T5; // train reaches the right edge
+const CYCLE = Math.max(crossing2OpenEnd, trainDepartTime) + 8; // small pause, then loop
 
 function crossingFactor(t, closeStart, closeEnd, openStart, openEnd){
   if(t < closeStart) return 0;
@@ -474,11 +480,7 @@ function animate(){
   }
   crossing2Timer.setText(`CLOSED: ${formatElapsed(crossing2Elapsed)}`);
 
-  // The train appears at trainAppearTime and, since the station is its final
-  // stop, simply remains visible (stopped) for the rest of the cycle — it
-  // never departs again. It only disappears once the cycle loops back
-  // around to before trainAppearTime.
-  const trainVisible = cycleT >= trainAppearTime;
+  const trainVisible = cycleT >= trainAppearTime && cycleT <= trainDepartTime;
   trainGroup.visible = trainVisible;
 
   let statusHTML;
@@ -486,14 +488,16 @@ function animate(){
     const tt = cycleT - trainAppearTime;
     const state = trainStateAt(tt);
     const speedKmh = Math.round(trainSpeedAt(tt) * 360);
-    trainGroup.position.x = trainX(tt); // right edge -> final stop at the station
+    trainGroup.position.x = trainX(tt); // right edge -> left edge
     updateTrainSpeedLabel(speedKmh);
     statusHTML = `<strong>Train state:</strong> ${state}. <b>${speedKmh} km/h</b>`;
   } else if(cycleT < crossing1CloseStart){
     statusHTML = `<strong>Train state:</strong> Initializing…`;
-  } else {
+  } else if(cycleT < trainAppearTime){
     const phase = cycleT < crossing1CloseEnd ? 'lowering barriers' : 'closed, train due shortly';
     statusHTML = `<strong>Train state:</strong> Not yet in view — Crossing 1 ${phase}.`;
+  } else {
+    statusHTML = `<strong>Train state:</strong> Departed to the left — awaiting next cycle.`;
   }
 
   document.getElementById('elapsedValue').textContent = formatElapsed(cycleT);
