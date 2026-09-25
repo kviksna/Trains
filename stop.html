@@ -1,0 +1,511 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Railway scene, before</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg:#080b0d; --panel:#10161a; --line:#263239; --text:#d7e0e4;
+    --muted:#819099; --green:#20c878; --green2:#8affbd; --road:#59666d;
+    --train-red:#c62828; --train-red2:#ef5350; --train-red3:#7f1d1d;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--bg);font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:var(--text)}
+  #scene{position:fixed;inset:0}
+  #hud{
+    position:fixed;left:16px;top:16px;z-index:5;padding:12px 14px;
+    background:rgba(12,17,20,.88);border:1px solid var(--line);border-radius:10px;
+    backdrop-filter:blur(8px);min-width:250px
+  }
+  #hud h1{font-size:15px;margin:0 0 7px;font-weight:650}
+  #hud p{font-size:12px;line-height:1.45;margin:0;color:var(--muted)}
+  #hud b{color:var(--text);font-weight:600}
+  #elapsed{margin-top:7px;font-variant-numeric:tabular-nums}
+  #trainStatus{
+    margin-top:10px;padding:8px 9px;border:1px solid #3a2929;border-radius:7px;
+    background:rgba(198,40,40,.08);font-size:11px;line-height:1.4;color:#ffaaa5
+  }
+  #trainStatus strong{color:#ffd0cd}
+  #legend{margin-top:9px;display:grid;gap:5px;font-size:11px;color:var(--muted)}
+  .sw{display:inline-block;width:22px;height:4px;border-radius:4px;vertical-align:middle;margin-right:6px}
+  #help{
+    position:fixed;right:16px;bottom:16px;z-index:5;padding:8px 10px;
+    font-size:11px;color:var(--muted);background:rgba(12,17,20,.78);
+    border:1px solid var(--line);border-radius:8px
+  }
+  #speedPanel{
+    position:fixed;right:16px;top:16px;z-index:5;padding:12px 14px;
+    background:rgba(12,17,20,.88);border:1px solid var(--line);border-radius:10px;
+    backdrop-filter:blur(8px);min-width:210px
+  }
+  #speedPanel .sp-title{font-size:12px;font-weight:650;margin:0 0 8px;color:var(--text)}
+  #speedPanel input[type=range]{width:100%;accent-color:#e8544a}
+  #speedPanel .sp-row{display:flex;justify-content:space-between;font-size:10.5px;color:var(--muted);margin-top:4px}
+  #speedValue{font-size:12px;color:#ff8a80;font-weight:600;margin-top:6px;text-align:center}
+  #speedPanel .sp-note{font-size:10px;color:var(--muted);margin-top:7px;line-height:1.35}
+</style>
+</head>
+<body>
+<div id="scene"></div>
+<div id="hud">
+  <h1>Train railway</h1>
+  <p id="elapsed"><b>Elapsed time: <span id="elapsedValue">00:00</span></b></p>
+  <p><b>Top-down</b> minimal representation of the highlighted corridor.</p>
+  <p>Two regulated road crossings with the railway station between them.</p>
+  <p><b>Distance between crossings: 775 m</b></p>
+  <div id="trainStatus"><strong>Train state:</strong> Initializing…</div>
+  <div id="legend">
+    <div><span class="sw" style="background:#20c878"></span>railway / highlighted corridor</div>
+    <div><span class="sw" style="background:#59666d"></span>road</div>
+    <div><span class="sw" style="background:#8affbd"></span>station platform</div>
+    <div><span class="sw" style="background:#e53935"></span>crossing closed (barrier + waiting cars)</div>
+  </div>
+</div>
+<div id="speedPanel">
+  <div class="sp-title">Animation speed</div>
+  <input id="speedRange" type="range" min="1" max="10" step="0.25" value="10" aria-label="Animation speed">
+  <div class="sp-row"><span>1× · realistic slow</span><span>10× · default</span></div>
+  <div id="speedValue">10× faster</div>
+  <div class="sp-note">Controls simulation time, not the train's displayed km/h.</div>
+</div>
+<div id="help">Drag: rotate · Wheel: zoom · Right drag: pan<br><span id="viewParams">View: pos (–, –, –) · zoom –×</span></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x080b0d);
+
+const camera = new THREE.OrthographicCamera(-8,8,4.5,-4.5,0.1,100);
+// Default view: pos (6.9, 6.1, -7.8), zoom 1.00x.
+camera.position.set(6.9,6.1,-7.8);
+camera.zoom = 1.00;
+camera.lookAt(0,0,0);
+camera.updateProjectionMatrix();
+
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth,innerHeight);
+document.getElementById('scene').appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera,renderer.domElement);
+controls.enableDamping=true;
+controls.target.set(0,0,0);
+controls.minZoom=0.75;
+controls.maxZoom=5;
+controls.maxPolarAngle=Math.PI/2.02;
+controls.minPolarAngle=0.05;
+
+// Coordinate system: 1 unit = 100 m.
+// Crossings are exactly 7.75 units apart = 775 m.
+const crossingX = 3.875;
+const corridorLength = 17;
+
+function mat(color, opacity=1){
+  return new THREE.MeshBasicMaterial({color,transparent:opacity<1,opacity});
+}
+function box(w,h,d,color,y=0,z=0,opacity=1){
+  const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat(color,opacity));
+  m.position.set(0,y,z); return m;
+}
+function cube(w,h,d,color,x,y,z,opacity=1){
+  const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat(color,opacity));
+  m.position.set(x,y,z); return m;
+}
+function label(text, x, y, color='#d7e0e4', scale=1, z=0.2){
+  const c=document.createElement('canvas'); c.width=512;c.height=96;
+  const ctx=c.getContext('2d');
+  ctx.clearRect(0,0,c.width,c.height);
+  ctx.font='600 34px system-ui, sans-serif';
+  ctx.fillStyle=color; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(text,256,48);
+  const t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace;
+  const s=new THREE.Sprite(new THREE.SpriteMaterial({map:t,transparent:true,depthTest:false}));
+  s.position.set(x,y,z); s.scale.set(2.6*scale,.49*scale,1);
+  scene.add(s); return s;
+}
+
+// A label whose text can be redrawn every frame (used for the live
+// crossing-2 closed-time counter).
+function dynamicLabel(text, x, y, color='#ffd0cd', scale=0.5, z=0.2, fontPx=34, res=1){
+  // `res` scales canvas resolution (and font) in lockstep so bigger text
+  // stays crisp instead of just stretching a low-res texture.
+  const cw=512*res, ch=96*res;
+  const c=document.createElement('canvas'); c.width=cw;c.height=ch;
+  const ctx=c.getContext('2d');
+  const t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace;
+  const s=new THREE.Sprite(new THREE.SpriteMaterial({map:t,transparent:true,depthTest:false}));
+  s.position.set(x,y,z); s.scale.set(2.6*scale,.49*scale,1);
+  scene.add(s);
+  function setText(newText){
+    ctx.clearRect(0,0,cw,ch);
+    ctx.font=`600 ${fontPx*res}px system-ui, sans-serif`;
+    ctx.fillStyle=color; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(newText,cw/2,ch/2);
+    t.needsUpdate=true;
+  }
+  setText(text);
+  return {sprite:s, setText};
+}
+
+// Ground/grid — deliberately sparse.
+scene.add(cube(17,0.06,8.5,0x11171a,0,-0.08,0));
+for(let x=-8;x<=8;x+=1){
+  const g=cube(0.012,0.01,8.5,0x1b252a,x,-0.02,0);
+  scene.add(g);
+}
+for(let y=-4;y<=4;y+=1){
+  const g=cube(17,0.01,0.012,0x1b252a,0,-0.02,y);
+  scene.add(g);
+}
+
+// Roads with regulated crossings. Each crossing keeps references to its
+// signal posts (recolored white->red when closing) and two waiting
+// passenger-car placeholders (one per driving lane), faded in/out.
+const postColorOpen = new THREE.Color(0xb7c0c4);
+const postColorClosed = new THREE.Color(0xe53935);
+
+function makeCar(offsetX, z){
+  const g = new THREE.Group();
+  const bodyMat = mat(0x9fb4c7,0);
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.16,0.09,0.34), bodyMat);
+  body.position.set(0,0.075+0.045,0);
+  g.add(body);
+  const cabinMat = mat(0xd7e4ec,0);
+  const cabin = new THREE.Mesh(new THREE.BoxGeometry(0.11,0.05,0.18), cabinMat);
+  cabin.position.set(0,0.075+0.09+0.025,0);
+  g.add(cabin);
+  g.position.set(offsetX,0,z);
+  g.scale.set(0.15,0.15,0.15);
+  return {group:g, materials:[bodyMat,cabinMat]};
+}
+
+function makeCrossing(x){
+  scene.add(cube(1.15,0.075,5.4,0x59666d,x,0,0));
+  // subtle road center marking
+  scene.add(cube(0.045,0.082,5.0,0x8b969b,x,0.01,0));
+  // crossing deck
+  scene.add(cube(1.35,0.10,1.0,0x252d31,x,0.03,0));
+  // signal posts — kept as references so they can be recolored
+  const posts=[];
+  for(const z of [-0.9,0.9]){
+    const p1=cube(0.08,0.45,0.08,postColorOpen.getHex(),x-0.68,0.23,z); scene.add(p1); posts.push(p1);
+    const p2=cube(0.08,0.45,0.08,postColorOpen.getHex(),x+0.68,0.23,z); scene.add(p2); posts.push(p2);
+  }
+  // green highlighted approach corridor
+  scene.add(cube(1.55,0.035,5.55,0x20c878,x,0.055,0,0.28));
+
+  // Waiting passenger cars, one per driving lane (right-hand lane on each
+  // approach), hidden (opacity 0) by default.
+  const carA = makeCar(x+0.22, 1.15);
+  const carB = makeCar(x-0.22, -1.15);
+  scene.add(carA.group); scene.add(carB.group);
+
+  return {x, posts, cars:[carA,carB]};
+}
+
+const crossing1 = makeCrossing(crossingX);  // encountered first by the train
+const crossing2 = makeCrossing(-crossingX); // encountered second
+
+label('CROSSING 1', crossingX, 0.55, '#ffaaa5', 0.5, 0);
+label('CROSSING 2', -crossingX, 0.55, '#ffaaa5', 0.5, 0);
+const crossing2Timer = dynamicLabel('CLOSED: 00:00', -crossingX, 1.35, '#ff1f1f', 2.1, 0, 34, 5);
+
+function setCrossingFactor(crossing, factor){
+  for(const p of crossing.posts){
+    p.material.color.copy(postColorOpen).lerp(postColorClosed, factor);
+  }
+  const carScale = 0.15 + 0.85*factor;
+  for(const car of crossing.cars){
+    car.group.scale.set(carScale,carScale,carScale);
+    for(const m of car.materials) m.opacity = factor;
+  }
+}
+
+// Railway highlighted corridor.
+scene.add(cube(corridorLength,0.06,0.38,0x20c878,0,0.08,0,0.78));
+
+// Two rails and sleepers.
+for(const z of [-0.16,0.16]){
+  scene.add(cube(corridorLength,0.075,0.045,0xcbd4d8,0,0.16,z));
+}
+for(let x=-8.5;x<=8.5;x+=0.38){
+  scene.add(cube(0.08,0.055,0.72,0x6f7b80,x,0.12,0));
+}
+
+// Station between crossings.
+const stationW=3.0;
+scene.add(cube(stationW,0.12,1.45,0x20292e,0,0.10,1.25));
+scene.add(cube(stationW,0.10,0.72,0x8affbd,0,0.19,1.25,0.8));
+scene.add(cube(2.0,0.30,0.55,0x38454b,0,0.34,1.25));
+scene.add(cube(0.28,0.34,0.35,0x7d898e,-0.85,0.49,1.25));
+scene.add(cube(0.28,0.34,0.35,0x7d898e,0.85,0.49,1.25));
+
+// Station label — placed directly above the station building in 3D space
+// (same x/z as the building) so it stays anchored to it as the camera orbits.
+label('TRAIN STATION',0,0.95,'#8affbd',1.0,1.25);
+
+
+// Train — red variations for all train object shapes.
+const trainW=0.85, trainH=0.16, trainD=0.30;
+const trainY=0.20+trainH/2;
+const trainGroup = new THREE.Group();
+trainGroup.visible = false; // hidden until it appears from the left edge
+
+const trainBody = new THREE.Mesh(
+  new THREE.BoxGeometry(trainW,trainH,trainD), mat(0xc62828)
+);
+trainBody.position.set(0,trainY,0);
+trainGroup.add(trainBody);
+
+const trainRoof = new THREE.Mesh(
+  new THREE.BoxGeometry(trainW*0.58,0.05,trainD*0.72), mat(0xef5350)
+);
+trainRoof.position.set(0,trainY+trainH/2+0.025,0);
+trainGroup.add(trainRoof);
+
+const trainUnderframe = new THREE.Mesh(
+  new THREE.BoxGeometry(trainW*0.92,0.06,trainD*0.88), mat(0x7f1d1d)
+);
+trainUnderframe.position.set(0,trainY-trainH/2-0.03,0);
+trainGroup.add(trainUnderframe);
+
+for(const x of [-trainW/2+0.045, trainW/2-0.045]){
+  const nose = new THREE.Mesh(
+    new THREE.BoxGeometry(0.09,trainH*0.9,trainD*0.96), mat(0x8e1b1b)
+  );
+  nose.position.set(x,trainY,0);
+  trainGroup.add(nose);
+}
+scene.add(trainGroup);
+
+// Floating speed readout attached to the train.
+function trainTextSprite(textValue){
+  const c=document.createElement('canvas'); c.width=320; c.height=72;
+  const ctx=c.getContext('2d');
+  ctx.clearRect(0,0,c.width,c.height);
+  ctx.font='700 28px system-ui, sans-serif';
+  ctx.fillStyle='#ffd0cd'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(textValue,160,36);
+  const t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace;
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:t,transparent:true,depthTest:false}));
+  sp.scale.set(1.45,0.33,1);
+  sp.position.set(0,0.75,0);
+  trainGroup.add(sp);
+  return {sprite:sp, canvas:c, ctx, texture:t};
+}
+const trainSpeedLabel = trainTextSprite('0 km/h');
+
+function updateTrainSpeedLabel(kmh){
+  const c=trainSpeedLabel.canvas, ctx=trainSpeedLabel.ctx;
+  ctx.clearRect(0,0,c.width,c.height);
+  ctx.font='700 28px system-ui, sans-serif';
+  ctx.fillStyle='#ffd0cd'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(`${kmh} km/h`,160,36);
+  trainSpeedLabel.texture.needsUpdate=true;
+}
+
+// ---- Train motion profile (unchanged physics for the approach: gradual
+// deceleration into the station). The train travels right -> left, so x(t)
+// below is applied to the 3D object directly (no mirroring): it starts at
+// xStart (right edge), cruises through Crossing 1 (+crossingX), decelerates
+// into the station — and now STAYS there. The station stop is the train's
+// final stop: it never accelerates back out or continues on toward
+// Crossing 2, so xCrossB/xEnd only remain as reference points used to keep
+// the approach speed/deceleration profile identical to before. ----
+const xStart=8.5, xCrossA=crossingX, xMidA=xCrossA/2, xStation=0, xCrossB=-crossingX, xEnd=-8.5;
+const d1 = xStart - xMidA;      // fast cruise
+const d2 = xMidA - xStation;    // deceleration into the station
+const d4 = xStation - xCrossB;  // (unused for motion now, kept for speed calc)
+const d5 = xCrossB - xEnd;      // (unused for motion now, kept for speed calc)
+
+const totalDuration = 360;      // seconds, reference full moving profile (unchanged)
+const stationStop = 120;        // seconds, reference dwell time (unchanged)
+const movingTime = totalDuration - stationStop;
+
+// Kept identical to before so the cruise speed and deceleration into the
+// station look exactly the same as they did prior to this change.
+const v = (d1 + 2*d2 + 2*d4 + d5) / movingTime;
+
+const t1 = d1/v;
+const t2 = 2*d2/v;
+
+const T1 = t1;
+const T2 = T1+t2; // moment the train reaches the station and stops — for good
+
+function trainX(t){
+  if(t < T1){
+    return xStart - v*t;
+  } else if(t < T2){
+    const tau = t - T1;
+    return xMidA - v*tau + v*tau*tau/(2*t2);
+  } else {
+    return xStation; // final stop — train remains here permanently
+  }
+}
+
+function trainSpeedAt(t){
+  if(t < T1) return v;
+  if(t < T2){
+    const tau=t-T1;
+    return Math.max(0, v*(1-tau/t2));
+  }
+  return 0;
+}
+
+function trainStateAt(t){
+  if(t < T1) return 'Cruising toward Crossing 1';
+  if(t < T2) return 'Decelerating for the approach to train station';
+  return 'Stopped at train station — final stop';
+}
+
+// ---- Full-sequence timeline ----
+// 0. Default view, no train, crossings open.
+// 1. Crossing 1 (right-hand crossing) starts closing.
+// 2. 45s later the train appears from the right edge and starts moving.
+// 3. 1s after the train appears, Crossing 2 (left-hand crossing) starts closing
+//    (unchanged — Crossing 2's closing time does not depend on the train's
+//    final stop).
+// 4. The train comes to its final stop at the station and does not continue.
+// 5. Crossing 1 re-opens 20s after the train has fully cleared it (unchanged).
+// 6. Crossing 2 re-opens 5 minutes after the train has come to its final
+//    stop at the station.
+const preambleDuration = 2;          // no train, default view
+const closeTransitionDuration = 2;   // barrier + car fade duration
+const crossingOpenDelay = 20;        // wait after train clears crossing 1 before re-opening
+const crossing2OpenDelayAfterStop = 5*60; // 5 minutes after the train's final stop
+
+const crossing1CloseStart = preambleDuration;                 // 2s
+const crossing1CloseEnd   = crossing1CloseStart + closeTransitionDuration; // 4s
+const trainAppearTime     = crossing1CloseStart + 45;          // 47s
+const crossing2CloseStart = trainAppearTime + 1;               // 48s (unchanged)
+const crossing2CloseEnd   = crossing2CloseStart + closeTransitionDuration; // 50s (unchanged)
+
+// Distance (in scene units) the train's centre must travel past Crossing 1's
+// centre before Crossing 1 is fully clear: half the crossing deck width
+// plus half the train's length.
+const zoneHalf = 0.675 + trainW/2;
+
+// Falls exactly within the constant-speed cruise segment of the motion
+// profile (segment 1), so the linear inversion below is exact.
+const cross1LeaveLocalT = (xStart - crossingX + zoneHalf) / v;
+
+const crossing1OpenStart = trainAppearTime + cross1LeaveLocalT + crossingOpenDelay;
+const crossing1OpenEnd   = crossing1OpenStart + closeTransitionDuration;
+
+// Crossing 2 now re-opens purely on a timer from the train's final stop —
+// it is never physically cleared by the train, since the train stops at the
+// station for good.
+const trainStopTime      = trainAppearTime + T2; // when the train comes to its final stop
+const crossing2OpenStart = trainStopTime + crossing2OpenDelayAfterStop;
+const crossing2OpenEnd   = crossing2OpenStart + closeTransitionDuration;
+
+const CYCLE = Math.max(crossing1OpenEnd, crossing2OpenEnd) + 8; // small pause, then loop
+
+function crossingFactor(t, closeStart, closeEnd, openStart, openEnd){
+  if(t < closeStart) return 0;
+  if(t < closeEnd) return (t-closeStart)/(closeEnd-closeStart);
+  if(t < openStart) return 1;
+  if(t < openEnd) return 1 - (t-openStart)/(openEnd-openStart);
+  return 0;
+}
+
+const clockStart = performance.now();
+let animationRate = Number(document.getElementById('speedRange').value) || 10;
+
+const speedRange = document.getElementById('speedRange');
+const speedValue = document.getElementById('speedValue');
+speedRange.addEventListener('input', ()=>{
+  animationRate = Number(speedRange.value);
+  speedValue.textContent = animationRate === 1 ? '1× normal' : `${animationRate}× faster`;
+});
+
+function formatElapsed(seconds){
+  const whole=Math.floor(seconds);
+  const m=Math.floor(whole/60);
+  const sec=whole%60;
+  return `${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+}
+
+// Render.
+function resize(){
+  const a=innerWidth/innerHeight;
+  const h=4.5, w=h*a;
+  camera.left=-w; camera.right=w; camera.top=h; camera.bottom=-h;
+  camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight);
+}
+addEventListener('resize',resize); resize();
+
+function animate(){
+  requestAnimationFrame(animate);
+  controls.update();
+
+  const rawElapsed = ((performance.now()-clockStart)/1000) * animationRate;
+  const cycleT = rawElapsed % CYCLE;
+
+  // Crossing barrier + waiting-car states (independent of whether the
+  // train is currently visible).
+  const f1 = crossingFactor(cycleT, crossing1CloseStart, crossing1CloseEnd, crossing1OpenStart, crossing1OpenEnd);
+  const f2 = crossingFactor(cycleT, crossing2CloseStart, crossing2CloseEnd, crossing2OpenStart, crossing2OpenEnd);
+  setCrossingFactor(crossing1, f1);
+  setCrossingFactor(crossing2, f2);
+
+  // Crossing 2 elapsed-closed-time counter: starts the instant crossing 2
+  // finishes closing, keeps counting while closed, freezes the instant it
+  // finishes opening again, and resets once the cycle loops.
+  let crossing2Elapsed;
+  if(cycleT < crossing2CloseEnd){
+    crossing2Elapsed = 0;
+  } else if(cycleT < crossing2OpenEnd){
+    crossing2Elapsed = cycleT - crossing2CloseEnd;
+  } else {
+    crossing2Elapsed = crossing2OpenEnd - crossing2CloseEnd;
+  }
+  crossing2Timer.setText(`CLOSED: ${formatElapsed(crossing2Elapsed)}`);
+
+  // The train appears at trainAppearTime and, since the station is its final
+  // stop, simply remains visible (stopped) for the rest of the cycle — it
+  // never departs again. It only disappears once the cycle loops back
+  // around to before trainAppearTime.
+  const trainVisible = cycleT >= trainAppearTime;
+  trainGroup.visible = trainVisible;
+
+  let statusHTML;
+  if(trainVisible){
+    const tt = cycleT - trainAppearTime;
+    const state = trainStateAt(tt);
+    const speedKmh = Math.round(trainSpeedAt(tt) * 360);
+    trainGroup.position.x = trainX(tt); // right edge -> final stop at the station
+    updateTrainSpeedLabel(speedKmh);
+    statusHTML = `<strong>Train state:</strong> ${state}. <b>${speedKmh} km/h</b>`;
+  } else if(cycleT < crossing1CloseStart){
+    statusHTML = `<strong>Train state:</strong> Initializing…`;
+  } else {
+    const phase = cycleT < crossing1CloseEnd ? 'lowering barriers' : 'closed, train due shortly';
+    statusHTML = `<strong>Train state:</strong> Not yet in view — Crossing 1 ${phase}.`;
+  }
+
+  document.getElementById('elapsedValue').textContent = formatElapsed(cycleT);
+  document.getElementById('trainStatus').innerHTML = statusHTML;
+
+  const cp = camera.position;
+  document.getElementById('viewParams').textContent =
+    `View: pos (${cp.x.toFixed(1)}, ${cp.y.toFixed(1)}, ${cp.z.toFixed(1)}) · zoom ${camera.zoom.toFixed(2)}×`;
+
+  renderer.render(scene,camera);
+}
+animate();
+</script>
+</body>
+</html>
