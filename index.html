@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sigulda Railway — Minimal 3D Skeleton</title>
+<title>Railway scene, before</title>
 <style>
   :root {
     color-scheme: dark;
@@ -50,7 +50,7 @@
 <body>
 <div id="scene"></div>
 <div id="hud">
-  <h1>Sigulda railway — skeleton</h1>
+  <h1>Train railway</h1>
   <p id="elapsed"><b>Elapsed time: <span id="elapsedValue">00:00</span></b></p>
   <p><b>Top-down</b> minimal representation of the highlighted corridor.</p>
   <p>Two regulated road crossings with the railway station between them.</p>
@@ -254,7 +254,7 @@ scene.add(cube(0.28,0.34,0.35,0x7d898e,0.85,0.49,1.25));
 
 // Station label — placed directly above the station building in 3D space
 // (same x/z as the building) so it stays anchored to it as the camera orbits.
-label('SIGULDA STATION',0,0.95,'#8affbd',1.0,1.25);
+label('TRAIN STATION',0,0.95,'#8affbd',1.0,1.25);
 
 
 // Train — red variations for all train object shapes.
@@ -378,8 +378,8 @@ function trainSpeedAt(t){
 
 function trainStateAt(t){
   if(t < T1) return 'Cruising toward Crossing 1';
-  if(t < T2) return 'Decelerating for the approach to Sigulda station';
-  if(t < T3) return 'Stopped at Sigulda station';
+  if(t < T2) return 'Decelerating for the approach to train station';
+  if(t < T3) return 'Stopped at train station';
   if(t < T4) return 'Accelerating out of the station toward Crossing 2';
   return 'Cruising toward the left-hand edge';
 }
