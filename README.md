@@ -1,5 +1,9 @@
 # Trains
 
-![Image 1](before_train_stop_scene.png)
+[Train stops](stop.html)
 
-![Image 2](map.png)
+![Before](before_train_stop_scene.png)
+
+![Stop](train_stop_scene.png)
+
+![Map](map.png)
